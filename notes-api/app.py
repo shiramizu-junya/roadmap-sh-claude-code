@@ -1,4 +1,5 @@
 import json
+import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
@@ -60,53 +61,74 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         return json.loads(raw)
 
-    # --- GET の処理 ---
+    # --- 各エンドポイントの処理(引数 match は path に対する正規表現マッチ結果) ---
+    def _health(self, match):
+        self._send(200, {"status": "ok"})
+
+    def _list_notes(self, match):
+        self._send(200, {"notes": store.list()})
+
+    def _get_note(self, match):
+        # 正規表現で取り出した id を数値に変換(非数値なら ValueError → 500)
+        note_id = int(match.group("id"))
+        note = store.get(note_id)
+        self._send(200, note)
+
+    def _create_note(self, match):
+        data = self._read_json()
+        # ← "title" や "body" が無いと KeyError → 500
+        note = store.create(data["title"], data["body"])
+        self._send(201, note)
+
+    def _update_note(self, match):
+        note_id = int(match.group("id"))
+        data = self._read_json()
+        try:
+            # title / body は任意。あるものだけ更新する
+            note = store.update(note_id, data.get("title"), data.get("body"))
+        except KeyError:
+            self._send(404, {"error": "not found"})
+            return
+        self._send(200, note)
+
+    def _delete_note(self, match):
+        note_id = int(match.group("id"))
+        store.delete(note_id)
+        self._send(200, {"deleted": note_id})
+
+    # --- ルーティングテーブル:(メソッド, パスの正規表現, ハンドラ) ---
+    #   完全一致は "$" 付き、"/notes/{id}" は終端アンカー無しの [^/]* で、
+    #   従来の == / startswith("/notes/") の挙動をそのまま再現する。
+    ROUTES = [
+        ("GET", re.compile(r"^/health$"), _health),
+        ("GET", re.compile(r"^/notes$"), _list_notes),
+        ("GET", re.compile(r"^/notes/(?P<id>[^/]*)"), _get_note),
+        ("POST", re.compile(r"^/notes$"), _create_note),
+        ("PUT", re.compile(r"^/notes/(?P<id>[^/]*)"), _update_note),
+        ("DELETE", re.compile(r"^/notes/(?P<id>[^/]*)"), _delete_note),
+    ]
+
+    # --- 共通のディスパッチャ:メソッドと path から該当ハンドラを探して呼ぶ ---
+    def _dispatch(self, method):
+        for route_method, pattern, handler in self.ROUTES:
+            if route_method == method:
+                match = pattern.match(self.path)
+                if match:
+                    handler(self, match)
+                    return
+        self._send(404, {"error": "not found"})
+
     def do_GET(self):
-        if self.path == "/health":
-            self._send(200, {"status": "ok"})
-        elif self.path == "/notes":
-            self._send(200, {"notes": store.list()})
-        elif self.path.startswith("/notes/"):
-            # "/notes/3" を "/" で割って3番目("3")を取り出し、数値に変換
-            note_id = int(self.path.split("/")[2])
-            note = store.get(note_id)
-            self._send(200, note)
-        else:
-            self._send(404, {"error": "not found"})
+        self._dispatch("GET")
 
-    # --- POST の処理 ---
     def do_POST(self):
-        if self.path == "/notes":
-            data = self._read_json()
-            # ← "title" や "body" が無いと KeyError → 500
-            note = store.create(data["title"], data["body"])
-            self._send(201, note)
-        else:
-            self._send(404, {"error": "not found"})
+        self._dispatch("POST")
 
-    # --- PUT の処理 ---
     def do_PUT(self):
-        if self.path.startswith("/notes/"):
-            note_id = int(self.path.split("/")[2])
-            data = self._read_json()
-            try:
-                # title / body は任意。あるものだけ更新する
-                note = store.update(note_id, data.get("title"), data.get("body"))
-            except KeyError:
-                self._send(404, {"error": "not found"})
-                return
-            self._send(200, note)
-        else:
-            self._send(404, {"error": "not found"})
+        self._dispatch("PUT")
 
-    # --- DELETE の処理 ---
     def do_DELETE(self):
-        if self.path.startswith("/notes/"):
-            note_id = int(self.path.split("/")[2])
-            store.delete(note_id)
-            self._send(200, {"deleted": note_id})
-        else:
-            self._send(404, {"error": "not found"})
+        self._dispatch("DELETE")
 
 
 def main():
