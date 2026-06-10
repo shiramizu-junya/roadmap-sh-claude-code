@@ -71,7 +71,11 @@ class Handler(BaseHTTPRequestHandler):
     def _get_note(self, match):
         # 正規表現で取り出した id を数値に変換(非数値なら ValueError → 500)
         note_id = int(match.group("id"))
-        note = store.get(note_id)
+        try:
+            note = store.get(note_id)
+        except KeyError:
+            self._send(404, {"error": "not found"})
+            return
         self._send(200, note)
 
     def _create_note(self, match):
@@ -93,7 +97,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _delete_note(self, match):
         note_id = int(match.group("id"))
-        store.delete(note_id)
+        try:
+            store.delete(note_id)
+        except KeyError:
+            self._send(404, {"error": "not found"})
+            return
         self._send(200, {"deleted": note_id})
 
     # --- ルーティングテーブル:(メソッド, パスの正規表現, ハンドラ) ---
